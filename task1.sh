@@ -179,10 +179,13 @@ prepare_folder(){
     
     if ! [ -z ${keepNfiles/ /} ] ; then ## if set, delete all old and > keepNfiles new
         debug "deleting old, keeping $keepNfiles" 
-        rm -i `ls -d $directory/* | grep -v -E "^$filepath$datetoday-[[:digit:]]{4}$" | grep -v -E "^$filepath$" | paste -d " " -`
-        rm -i `ls -dr $directory/* | head -n -$keepNfiles | paste -d " " -`
+        rm -f `ls -d $directory/* | grep -v -E "^$filepath$datetoday-[[:digit:]]{4}$" | grep -v -E "^$filepath$" | paste -d " " -`
+        rm -f `ls -dr $directory/* | head -n -$keepNfiles | paste -d " " -`
     fi
 }
+
+set -e
+set -o pipefail
 process_arguments $ARGS 
 prepare_folder $filepath
 create_path $filepath
