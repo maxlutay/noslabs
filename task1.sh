@@ -82,7 +82,7 @@ hwinfo(){
 
 netinfo(){
     echo "----Network----"
-    log "$(ip address show | sed -n 's/^[[:digit:]]\{1,\}:[[:blank:]]\{0,\}\(.\{1,\}:\).*/\1/p;s/[[:blank:]]\{1,\}inet6\{0,1\}[[:blank:]]\(.\{1,\}[[:digit:]]\)[[:blank:]].*/\1/p' | paste -d " " - - - )" 
+    log "$(ip -4 address show | sed -n 's/^[[:digit:]]\{1,\}:[[:blank:]]\{0,\}\([^:]\{1,\}:\).*/\1\t/p;s/[[:blank:]]\{1,\}inet6\{0,1\}[[:blank:]]\(.\{1,\}[[:digit:]]\)[[:blank:]].*/\1/p' | paste -d " " - - )" 
 }
 
 
