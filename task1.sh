@@ -3,7 +3,7 @@
 
 ARGS="$@"           # script's arguments
 ARGC="$#"           # script's arguments count
-DEBUG=1             # debug logs mode, see: debug()
+DEBUG=0             # debug logs mode, see: debug()
 filepath="$HOME/bash/task1.out" # default filepath
 keepNfiles=''
 
@@ -189,42 +189,4 @@ create_path $filepath
 allinfo > $filepath
 debug "end script"
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-#    while [ "$#" -gt 0 ] ; do 
-#        case "$1" in 
-#            -h|--help)
-#                show_help
-#                return 0 
-#                ;;
-#            -n)
-#                debug "'-n' flag present"
-#                ARG_NUMBER=$2
-#                if ! [[ $2 =~ '^[1-9][0-9]*$' ]]; then
-#                    error "Number should be positive integer"
-#                    return 1
-#                else
-#                    debug "Number is: $2";
-#                fi
-#                shift
-#                shift
-#                ;;
-#            *) 
-#                debug 'arg_filepath' $1
-#                shift
-#                ;;
-#        esac
-#    done
-#}
 
