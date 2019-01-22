@@ -14,7 +14,8 @@ struct param {
     int size;
 };
 
-sem_t sem1, sem2;
+sem_t sem;
+pthread_mutex_t mut = PTHREAD_MUTEX_INITIALIZER;
 
 int main(){
 
@@ -47,24 +48,26 @@ int main(){
     printf("\n");
     
 
-    sem_init(&sem1,0,0);
-    sem_init(&sem2,0,0);
 
+    sem_init(&sem,0,0);
+    pthread_mutex_lock(&mut);
+    
     pthread_t th_work, th_SumElement;
     int iret_w, iret_se;
     iret_w = pthread_create(&th_work, NULL,work,(void*)&p);//pass ptr to array structure
     iret_se = pthread_create(&th_SumElement, NULL, sumelement, (void*)&p);//-||-
     
     for(int i = 0; i < p.size; i++){ 
-        sem_wait(&sem1);
+        sem_wait(&sem);
         printf("%4.2f ", p.arr[i]);
         fflush(stdout);
     };
     printf("\n");
-    sem_post(&sem2);
+
+    pthread_mutex_unlock(&mut);
+
     pthread_join(th_SumElement,NULL);
-    sem_destroy(&sem1);
-    sem_destroy(&sem2);
+    sem_destroy(&sem);
     exit(0);
 }
 
@@ -96,8 +99,9 @@ void* work(void* _args){
                 p.arr[i] = p.arr[li + countfound];
                 p.arr[li + countfound] = tmp;
                 //endswap
-
-                sem_post(&sem1);//notify has clone
+                
+                if(countfound==1) sem_post(&sem);
+                sem_post(&sem);//notify has clone
 
 
                                
@@ -119,18 +123,18 @@ void* work(void* _args){
         };
 
     };
-    for(int i = 0; i < p.size; i++) sem_post(&sem1);
+    for(int i = ri; i <= p.size; i++) sem_post(&sem);
 }
 
 
 void* sumelement(void* _args){
-    sem_wait(&sem2);
+    pthread_mutex_lock(&mut);
     double sum = 0;
     struct param p = *((struct param*)_args);
     for(int i = 0; i < p.size; i++){
         sum += p.arr[i];
     };
     printf("\nSum %4.2f\n", sum);
-    sem_post(&sem2);
+    pthread_mutex_unlock(&mut);
 }
 
