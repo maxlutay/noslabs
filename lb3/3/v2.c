@@ -22,25 +22,28 @@ int main(){
     struct param p;
 
     char* str_arrlen = (char*)malloc(10);
-    printf("Enter array length:");
+    printf("Enter array length:");//size to allocate
     fgets(str_arrlen,10,stdin);
     p.size = atoi(str_arrlen);
+    p.arr = (double*)malloc(p.size*sizeof(*p.arr));
 
     char* str_data = (char*)malloc(256);
-    printf("Enter elements:");
+    printf("\nEnter elements:");
     fgets(str_data,256,stdin);
 
     int i = 0;
-    p.arr = (double*)malloc(p.size*sizeof(*p.arr));
     char* tmp = strtok(str_data," ");
     p.arr[i++] = atof(tmp);
     
-    while(NULL != (tmp=strtok(NULL," ")) ){  p.arr[i++] = atof(tmp);  }
+    while(NULL != (tmp=strtok(NULL," ")) ){//strtok on NULL process str_data next
+        if(i >= p.size){ p.arr = realloc(p.arr,(p.size+=p.size)* sizeof(*p.arr));};//if entered more than requested
+        p.arr[i++] = atof(tmp); 
+    }
 
     p.size = i;
-    p.arr = realloc(p.arr, p.size * sizeof(*p.arr));
+    p.arr = realloc(p.arr, p.size * sizeof(*p.arr));//fit memory to actual size 
     
-    printf("Entered %d numbers : ",i);
+    printf("\nEntered %d numbers : ",i);
     while(i > 0){ printf("%4.2f ", p.arr[p.size - i--]); };
     printf("\n");
     
