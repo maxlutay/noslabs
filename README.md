@@ -1,1 +1,1 @@
-# Networking Operating Systems (Linux)
+# Networking Operating Systems Course (Linux)
