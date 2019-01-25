@@ -195,6 +195,9 @@ void* emitter(void* _args){
         exit(EXIT_FAILURE); 
     };
 
+    
+    //todo: sockopt hdrincl
+    
 
     for(uint16_t p = ema->port_from; p <= ema->port_to; p++){
         struct pseudoheader psh;
