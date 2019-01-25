@@ -41,6 +41,9 @@ struct pseudoheader{
     uint16_t tcplength; 
 };
 
+
+pthread_mutex_t m = PTHREAD_MUTEX_INITIALIZER;
+
 int main(int argc, char* argv[]){
     char* hostname;//max 253
     uint16_t from_port = 0, to_port = ~0;//default from_port=0, to_port=2^16-1=65535
@@ -86,7 +89,7 @@ int main(int argc, char* argv[]){
     hints.ai_family = AF_INET;
     hints.ai_socktype = SOCK_RAW;
     hints.ai_protocol = IPPROTO_TCP;
-    //hints.ai_flags = 0;
+    hints.ai_flags = 0;
     hints.ai_canonname = NULL; 
     hints.ai_addr = NULL;
     hints.ai_next = NULL;
@@ -117,8 +120,6 @@ int main(int argc, char* argv[]){
 
 
 
-
-
     struct emitter_args* em_a = calloc(1,sizeof(struct emitter_args));
     em_a->src = src;
     em_a->dest = dest;
@@ -134,9 +135,11 @@ int main(int argc, char* argv[]){
         exit(EXIT_FAILURE);
     };
 
-    
-    pthread_join(handler_thread,NULL);
-    pthread_join(emitter_thread,NULL);
+   
+
+    pthread_join(&handler_thread,NULL);
+    pthread_join(&emitter_thread,NULL);
+
 
     printf(">End\n");
 };
@@ -146,32 +149,35 @@ int main(int argc, char* argv[]){
 void* emitter(void* _args){
     struct emitter_args* ema = (struct emitter_args*)_args;
 
+    printf(">emitter\n");
+    fflush(stdout);
 
 
-    printf(">Start emitter .\n");
-    
     char buffer[576];
-    memset(buffer, 0, 576);
+    memset(buffer, 0, sizeof(buffer));
 
     struct ip* iph = (struct ip*) buffer;//0-19bytes
-    iph->ip_hl = 5;//header length
+    iph->ip_hl = sizeof(struct ip)/4;//ip header length in 32bitwords
     iph->ip_v = 4;//version
     iph->ip_tos = 0;//type of service
-    iph->ip_len = (sizeof(struct ip)+sizeof(struct tcphdr));///8;//total length bytes
-    iph->ip_id = htons(54321);//id of packet
-    iph->ip_off = 0;//offset
+    iph->ip_len = htons(sizeof(struct ip)+sizeof(struct tcphdr));//iph+data length bytes, in this case iph+tcph
+    iph->ip_id = htons(rand());//id of packet
+    iph->ip_off = 0;//offset(in packet)
     iph->ip_ttl = 64;//time to live
     iph->ip_p = ema->sockarg.protocol;//encapsulated protocol type
-    iph->ip_sum = 0;//checksum autocomputed
     iph->ip_src = ema->src->sin_addr;//source ip address
     iph->ip_dst = ema->dest->sin_addr;//dest ip address
-    
+    iph->ip_sum = 0;
+    //iph->ip_sum = chsum((uint16_t*)iph, sizeof(struct ip));//prev checksum = 0// autocompute
+
+   
+
     struct tcphdr* tcph = (struct tcphdr*) (buffer + sizeof(struct ip));//20-39bytes
     tcph->source = htons(rand()); // source port
-    tcph->dest = 0; // dest port will be changing 
+    tcph->dest = 0; // dest port, will be changing 
     tcph->seq = htonl(rand());//sequence number
     tcph->ack_seq = 0;//acknowledge sequence number
-    tcph->doff = sizeof(struct tcphdr) / 32;// tcp data offset in 32bit words
+    tcph->doff = sizeof(struct tcphdr)/4;// tcp data offset in 32bit words, 1/8/4=1/32
     tcph->res1 = 0;//reserved
     //flags
     tcph->fin = 1;//maimon
@@ -186,7 +192,7 @@ void* emitter(void* _args){
     tcph->urg_ptr = 0;// ignored cause tcph->urg
 
 
-    printf("\n%d\n", ntohs(tcph->source));
+    printf(">source port %d\n", ntohs(tcph->source));
 
     int sock_fd = socket(ema->sockarg.family,ema->sockarg.socktype,ema->sockarg.protocol);
 
@@ -195,65 +201,67 @@ void* emitter(void* _args){
         exit(EXIT_FAILURE); 
     };
 
-    
-    //todo: sockopt hdrincl
-    
+    int one=1;
+    if(-1 == setsockopt(sock_fd,IPPROTO_IP,IP_HDRINCL,&one,4)) printf("errr %d %s", errno, strerror(errno));
+
+
+
+    pthread_mutex_lock(&m);
 
     for(uint16_t p = ema->port_from; p <= ema->port_to; p++){
         struct pseudoheader psh;
         psh.src = iph->ip_src.s_addr;
-        psh.dest = iph->ip_src.s_addr;
+        psh.dest = iph->ip_dst.s_addr;
         psh.zero = 0;
         psh.protocol = iph->ip_p;
-        psh.tcplength = htons(sizeof(struct tcphdr)/8);
+        psh.tcplength = htons(sizeof(struct tcphdr));//tcphlen+datalen
 
         tcph->dest = htons(p);
         tcph->check = 0;
 
+        uint8_t tmp[sizeof(struct pseudoheader)+sizeof(struct tcphdr)];//pseudolen+tcphdrlen
+        memcpy(tmp,&psh,sizeof(struct pseudoheader));
+        memcpy(tmp+sizeof(struct pseudoheader),tcph,sizeof(struct tcphdr));
 
-        uint32_t tmp[8];
-        memcpy(tmp,tcph,sizeof(struct tcphdr));
-        memcpy(tmp+3,&psh,sizeof(struct pseudoheader));
-
-        tcph->check = chsum(tmp,32);
-
-
-        
+        tcph->check = chsum((uint16_t*)tmp,sizeof(tmp));//!!do not convert htons
 
 
-        int sendlen = sizeof(struct ip) + sizeof(struct tcphdr);
-        int err = sendto(sock_fd, buffer, sendlen, 0 | MSG_CONFIRM,(struct sockaddr*)ema->dest, sizeof(*ema->dest) );
-        {
-            uint16_t ipchsum = iph->ip_sum;
-            uint16_t mychsum = chsum((uint16_t*)iph,iph->ip_hl*4);
-            iph->ip_sum = mychsum;
-            uint16_t mychsum2 = chsum((uint16_t*)iph,iph->ip_hl*4);
-            
+        int sendbuflen = sizeof(struct ip) + sizeof(struct tcphdr);
 
-            if(ipchsum != mychsum){ printf("errchsum %d %d %d", ipchsum, mychsum,mychsum2); }else{
-            printf("okchsum");
-            };
-        
-        };
+        int err = sendto(sock_fd, buffer, sendbuflen, 0, (struct sockaddr*)ema->dest, sizeof(struct sockaddr) );
+        /*debug
+        printf("2*\n");
+        for(int i = 0; i < sendbuflen; i++){
+                printf("%02x", (uint8_t)buffer[i]);
+
+                printf("_");
+                if(i%4 == 3) printf("\n");
+        }        
+        printf("*\n");
+        */
         if(err == -1){ 
             printf("Error(%d) sending packet: %s\n",errno, strerror(errno));
             close(sock_fd);
             exit(EXIT_FAILURE);
         };
 
-
-
 };//endfor
 
 close(sock_fd);
 
-printf("Emitter finished\n");
+
+printf(">emitter fin\n");
 fflush(stdout);
 }
 
 void* handler(void* _args){
-    printf("\n>start handler\n");
+    printf("\n>handler\n");
     fflush(stdout);
+
+    pthread_mutex_trylock(&m);
+
+
+
 
     struct handler_args* haa = (struct handler_args*)_args;
     int sock_fd = socket(haa->sockarg.family,haa->sockarg.socktype,haa->sockarg.protocol);
@@ -262,56 +270,36 @@ void* handler(void* _args){
         exit(EXIT_FAILURE); 
     };
 
-    uint32_t* buffer = malloc(8*(uint16_t)~0);//max 65535 bytes
+    uint8_t* buffer = malloc((uint16_t)~0);//max 65535 bytes
     
     struct timeval tv;
-    tv.tv_sec = 3;
+    tv.tv_sec = 10;
     setsockopt(sock_fd,SOL_SOCKET,SO_RCVTIMEO, &tv, sizeof(struct timeval) );    
-
+    
+    pthread_mutex_destroy(&m);
     while(1){
-        int16_t recieved_len = recvfrom(sock_fd, buffer, 8<<16,0, (struct sockaddr*)haa->dest, sizeof(struct sockaddr));
+        int salen = sizeof(struct sockaddr); 
+        int16_t recieved_len = recvfrom(sock_fd, buffer, 8<<16,0, (struct sockaddr*)haa->dest, &salen);
         if(recieved_len <= 0){
-           if(errno == EWOULDBLOCK){break;};
+           if(errno == EWOULDBLOCK){
+                printf(">Socket timeout\n");
+                break;
+           };
            printf("recvfrom error(%d) : %s\n", errno, strerror(errno));
            fflush(stdout);
            close(sock_fd);
            exit(EXIT_FAILURE);
         };
-        struct ip* iph;
-        iph = (struct ip*) buffer;
-        struct tcphdr* tcph;
-        tcph = (struct tcphdr*)(buffer+iph->ip_hl);
+        struct ip* iph = (struct ip*) buffer;
+        struct tcphdr* tcph = (struct tcphdr*)(buffer+iph->ip_hl);
         printf("+ %d on\n", ntohs(tcph->source) );
 
     };
 
 
-    //struct timeval tv;
-    //tv.tv_sec = 60;
-    //setsockopt(sock_raw,SOL_SOCKET,SO_RCVTIMEO, &tv, sizeof(struct timeval) );    
-     /*
-    while(1)
-    {
-        //Receive a packet
-        printf("\nlistening\n");
-        data_size = recvfrom(sock_raw , buffer , 65536 , 0 , &saddr , &saddr_size);
-        if(data_size <0 )
-        {
-            if(errno == EWOULDBLOCK){break;};
-            printf("Recvfrom error , failed to get packets\n");
-            fflush(stdout);
-            return 1;
-        }
-         
-        //Now process the packet
-        process_packet(buffer , data_size);
-    }
-    close(sock_raw);
-    printf("Sniffer finished.\n");
-    fflush(stdout);
-    return 0;
-*/
 
+printf(">handler fin\n");
+fflush(stdout);
 }
 
 
@@ -329,15 +317,17 @@ uint16_t chsum(uint16_t* data_ptr, int nbytes){//len in bytes
     uint32_t sum = 0;
     while(nbytes >1){
         sum += *(data_ptr++);
-        nbytes -= 2;
+        nbytes -= sizeof(uint16_t);//2
     };
-    
+
     //if odd len
     if(nbytes > 0) sum += *(uint8_t*)data_ptr;
-    
+   
     //fit 16bit
-    while(sum >> 16){ sum = (sum & 0xffff) + (sum >> 16); };
-    return (uint16_t)(~sum);//inverted
+    sum = (sum & 0x0000ffff) + (sum >> 16); 
+    sum += (sum >> 16);
+
+    return ~sum;
 };
 
 
