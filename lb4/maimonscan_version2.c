@@ -30,7 +30,7 @@ struct emitter_args {
 
 
 struct handler_args {
-    struct sockaddr_in *dest;
+    struct sockaddr_in *dest, *src;
     struct sockparam sockarg;
 };
 
@@ -42,7 +42,6 @@ struct pseudoheader{
 };
 
 
-pthread_mutex_t m = PTHREAD_MUTEX_INITIALIZER;
 
 int main(int argc, char* argv[]){
     char* hostname;//max 253
@@ -81,7 +80,8 @@ int main(int argc, char* argv[]){
     printf("\n>host: %s\n>from: %d\n>to: %d\n\n", hostname, from_port, to_port);
 
 
-    struct sockaddr_in * src, * dest;
+    struct sockaddr_in * src;
+    struct sockaddr_in * dest;
     
     //resolve hostname
     struct addrinfo hints;
@@ -94,30 +94,32 @@ int main(int argc, char* argv[]){
     hints.ai_addr = NULL;
     hints.ai_next = NULL;
 
-    dest = (struct sockaddr_in*)resolve_hostname(hostname,&hints);
 
+
+    dest = (struct sockaddr_in*)resolve_hostname(hostname,&hints);
     printf(">'%s' resolved to %s\n", hostname, inet_ntoa(dest->sin_addr) );
     
+    
+
     src = (struct sockaddr_in*)get_self_addr(hints.ai_family);
     printf(">self %s \n\n", inet_ntoa(src->sin_addr) );
     
-    printf(">Starting threads...\n");
-
-    pthread_t handler_thread, emitter_thread;
     
+
+    printf(">Starting threads...\n");
+    
+    pthread_t handler_thread, emitter_thread;
     int th_err = 0;
-
-
 
 
     struct handler_args* ha_a = calloc(1,sizeof(struct handler_args));
     ha_a->dest = dest;
+    ha_a->src = src;
     ha_a->sockarg.family = hints.ai_family;
     ha_a->sockarg.socktype = hints.ai_socktype;
     ha_a->sockarg.protocol = hints.ai_protocol;
-
+    
     th_err += pthread_create( &handler_thread, NULL,  handler, (void*) ha_a);
-
 
 
     struct emitter_args* em_a = calloc(1,sizeof(struct emitter_args));
@@ -126,6 +128,7 @@ int main(int argc, char* argv[]){
     em_a->port_to = to_port;
     em_a->port_from = from_port;
     em_a->sockarg = ha_a->sockarg;
+    
 
     th_err += pthread_create( &emitter_thread, NULL, emitter, (void*)em_a );
 
@@ -137,8 +140,8 @@ int main(int argc, char* argv[]){
 
    
 
-    pthread_join(&handler_thread,NULL);
-    pthread_join(&emitter_thread,NULL);
+    pthread_join(handler_thread,NULL);
+    pthread_join(emitter_thread,NULL);
 
 
     printf(">End\n");
@@ -151,7 +154,6 @@ void* emitter(void* _args){
 
     printf(">emitter\n");
     fflush(stdout);
-
 
     char buffer[576];
     memset(buffer, 0, sizeof(buffer));
@@ -205,9 +207,6 @@ void* emitter(void* _args){
     if(-1 == setsockopt(sock_fd,IPPROTO_IP,IP_HDRINCL,&one,4)) printf("errr %d %s", errno, strerror(errno));
 
 
-
-    pthread_mutex_lock(&m);
-
     for(uint16_t p = ema->port_from; p <= ema->port_to; p++){
         struct pseudoheader psh;
         psh.src = iph->ip_src.s_addr;
@@ -229,16 +228,6 @@ void* emitter(void* _args){
         int sendbuflen = sizeof(struct ip) + sizeof(struct tcphdr);
 
         int err = sendto(sock_fd, buffer, sendbuflen, 0, (struct sockaddr*)ema->dest, sizeof(struct sockaddr) );
-        /*debug
-        printf("2*\n");
-        for(int i = 0; i < sendbuflen; i++){
-                printf("%02x", (uint8_t)buffer[i]);
-
-                printf("_");
-                if(i%4 == 3) printf("\n");
-        }        
-        printf("*\n");
-        */
         if(err == -1){ 
             printf("Error(%d) sending packet: %s\n",errno, strerror(errno));
             close(sock_fd);
@@ -257,13 +246,10 @@ fflush(stdout);
 void* handler(void* _args){
     printf("\n>handler\n");
     fflush(stdout);
-
-    pthread_mutex_trylock(&m);
-
-
-
-
     struct handler_args* haa = (struct handler_args*)_args;
+
+
+
     int sock_fd = socket(haa->sockarg.family,haa->sockarg.socktype,haa->sockarg.protocol);
     if(sock_fd == -1){
         printf("Error handler socket creation: %d %s\n", errno, strerror(errno));
@@ -273,13 +259,12 @@ void* handler(void* _args){
     uint8_t* buffer = malloc((uint16_t)~0);//max 65535 bytes
     
     struct timeval tv;
-    tv.tv_sec = 10;
+    tv.tv_sec = 3;
     setsockopt(sock_fd,SOL_SOCKET,SO_RCVTIMEO, &tv, sizeof(struct timeval) );    
     
-    pthread_mutex_destroy(&m);
     while(1){
         int salen = sizeof(struct sockaddr); 
-        int16_t recieved_len = recvfrom(sock_fd, buffer, 8<<16,0, (struct sockaddr*)haa->dest, &salen);
+        int16_t recieved_len = recvfrom(sock_fd, buffer, 8<<16 -1 ,0, (struct sockaddr*)haa->dest, &salen);
         if(recieved_len <= 0){
            if(errno == EWOULDBLOCK){
                 printf(">Socket timeout\n");
@@ -291,8 +276,14 @@ void* handler(void* _args){
            exit(EXIT_FAILURE);
         };
         struct ip* iph = (struct ip*) buffer;
-        struct tcphdr* tcph = (struct tcphdr*)(buffer+iph->ip_hl);
-        printf("+ %d on\n", ntohs(tcph->source) );
+        struct tcphdr* tcph = (struct tcphdr*)(buffer + iph->ip_hl * 4);
+        
+	//if(iph->ip_src.s_addr = haa->dest->sin_addr.s_addr){
+		printf(">d>> %s ", inet_ntoa(iph->ip_src) );
+		printf("  %s %d ", inet_ntoa(iph->ip_dst), ntohs(tcph->dest));
+		printf("+ %d closed rst=%d\n", ntohs(tcph->source), tcph->rst );
+	
+	//}
 
     };
 
