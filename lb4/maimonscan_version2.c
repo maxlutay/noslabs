@@ -1,16 +1,18 @@
 #include<stdio.h> //printf
-#include<string.h> //memset,strtok,strcmp
+#include<string.h> //memset,memcpy,strtok,strcmp
 #include<stdlib.h> //for exit(0);
 #include<sys/socket.h>
 #include<errno.h> //For errno - the error number
 #include<pthread.h>
-#include<netdb.h> //getaddrinfo
-#include<arpa/inet.h>//hton/ntoh, inet_pton/inet_ntop
+#include<netdb.h> //getaddrinfo/freeaddrinfo
+#include<arpa/inet.h> //hton*/ntoh*, inet_ntoa
 #include<netinet/tcp.h>//struct tcphdr
 #include<netinet/ip.h>//struct ip
 #include<unistd.h>//close(fd)
 #include<ifaddrs.h>//getifaddrs/freeifaddrs
-#include<net/if.h>
+#include<net/if.h>//IFF_LOOPBACK
+#include<time.h>
+
 
 void help(char* message);
 uint16_t chsum(uint16_t* data_ptr, int len);
@@ -62,7 +64,7 @@ int main(int argc, char* argv[]){
             if(NULL!=strtok(NULL,"-")){ help("invalid port format"); };
             if(tmp == NULL){//if only from specified
                 to_port = from_port;
-          } else {
+            } else {
                 int tmp_to = atoi(tmp);               
                 if(tmp_to < 0 || tmp_to > to_port){ help("invalid port"); };
                 to_port = tmp_to;
@@ -82,7 +84,7 @@ int main(int argc, char* argv[]){
 
     struct sockaddr_in * src;
     struct sockaddr_in * dest;
-    
+
     //resolve hostname
     struct addrinfo hints;
     memset(&hints, 0, sizeof(struct addrinfo));
@@ -98,16 +100,16 @@ int main(int argc, char* argv[]){
 
     dest = (struct sockaddr_in*)resolve_hostname(hostname,&hints);
     printf(">'%s' resolved to %s\n", hostname, inet_ntoa(dest->sin_addr) );
-    
-    
+
+
 
     src = (struct sockaddr_in*)get_self_addr(hints.ai_family);
     printf(">self %s \n\n", inet_ntoa(src->sin_addr) );
-    
-    
+
+
 
     printf(">Starting threads...\n");
-    
+
     pthread_t handler_thread, emitter_thread;
     int th_err = 0;
 
@@ -118,7 +120,7 @@ int main(int argc, char* argv[]){
     ha_a->sockarg.family = hints.ai_family;
     ha_a->sockarg.socktype = hints.ai_socktype;
     ha_a->sockarg.protocol = hints.ai_protocol;
-    
+
     th_err += pthread_create( &handler_thread, NULL,  handler, (void*) ha_a);
 
 
@@ -128,17 +130,17 @@ int main(int argc, char* argv[]){
     em_a->port_to = to_port;
     em_a->port_from = from_port;
     em_a->sockarg = ha_a->sockarg;
-    
+
 
     th_err += pthread_create( &emitter_thread, NULL, emitter, (void*)em_a );
 
-   
+
     if( th_err != 0){
         printf("Error threads creation\n");
         exit(EXIT_FAILURE);
     };
 
-   
+
 
     pthread_join(handler_thread,NULL);
     pthread_join(emitter_thread,NULL);
@@ -158,6 +160,8 @@ void* emitter(void* _args){
     char buffer[576];
     memset(buffer, 0, sizeof(buffer));
 
+    srand(time(NULL));
+
     struct ip* iph = (struct ip*) buffer;//0-19bytes
     iph->ip_hl = sizeof(struct ip)/4;//ip header length in 32bitwords
     iph->ip_v = 4;//version
@@ -170,9 +174,9 @@ void* emitter(void* _args){
     iph->ip_src = ema->src->sin_addr;//source ip address
     iph->ip_dst = ema->dest->sin_addr;//dest ip address
     iph->ip_sum = 0;
-    //iph->ip_sum = chsum((uint16_t*)iph, sizeof(struct ip));//prev checksum = 0// autocompute
+    //iph->ip_sum = chsum((uint16_t*)iph, sizeof(struct ip));//prev checksum = 0// autocomputed
 
-   
+
 
     struct tcphdr* tcph = (struct tcphdr*) (buffer + sizeof(struct ip));//20-39bytes
     tcph->source = htons(rand()); // source port
@@ -181,7 +185,7 @@ void* emitter(void* _args){
     tcph->ack_seq = 0;//acknowledge sequence number
     tcph->doff = sizeof(struct tcphdr)/4;// tcp data offset in 32bit words, 1/8/4=1/32
     tcph->res1 = 0;//reserved
-    //flags
+    //flags//todo: provide other methods
     tcph->fin = 1;//maimon
     tcph->syn = 0;
     tcph->rst = 0;
@@ -204,26 +208,27 @@ void* emitter(void* _args){
     };
 
     int one=1;
-    if(-1 == setsockopt(sock_fd,IPPROTO_IP,IP_HDRINCL,&one,4)) printf("errr %d %s", errno, strerror(errno));
+    if(-1 == setsockopt(sock_fd,IPPROTO_IP,IP_HDRINCL,&one,4)) printf("error emitter sockopt: %d %s", errno, strerror(errno));
 
+    struct pseudoheader psh;
+    psh.src = iph->ip_src.s_addr;
+    psh.dest = iph->ip_dst.s_addr;
+    psh.zero = 0;
+    psh.protocol = iph->ip_p;
+    psh.tcplength = htons(sizeof(struct tcphdr));//tcphlen+datalen
+
+    uint8_t tmp[sizeof(struct pseudoheader)+sizeof(struct tcphdr)];//pseudolen+tcphdrlen
+    
+    memcpy(tmp,&psh,sizeof(struct pseudoheader));
 
     for(uint16_t p = ema->port_from; p <= ema->port_to; p++){
-        struct pseudoheader psh;
-        psh.src = iph->ip_src.s_addr;
-        psh.dest = iph->ip_dst.s_addr;
-        psh.zero = 0;
-        psh.protocol = iph->ip_p;
-        psh.tcplength = htons(sizeof(struct tcphdr));//tcphlen+datalen
 
         tcph->dest = htons(p);
-        tcph->check = 0;
+        tcph->check = 0;//skip while computing
 
-        uint8_t tmp[sizeof(struct pseudoheader)+sizeof(struct tcphdr)];//pseudolen+tcphdrlen
-        memcpy(tmp,&psh,sizeof(struct pseudoheader));
         memcpy(tmp+sizeof(struct pseudoheader),tcph,sizeof(struct tcphdr));
 
         tcph->check = chsum((uint16_t*)tmp,sizeof(tmp));//!!do not convert htons
-
 
         int sendbuflen = sizeof(struct ip) + sizeof(struct tcphdr);
 
@@ -234,13 +239,13 @@ void* emitter(void* _args){
             exit(EXIT_FAILURE);
         };
 
-};//endfor
+    };//endfor
 
-close(sock_fd);
+    close(sock_fd);
 
 
-printf(">emitter fin\n");
-fflush(stdout);
+    printf(">emitter fin\n");
+    fflush(stdout);
 }
 
 void* handler(void* _args){
@@ -257,40 +262,39 @@ void* handler(void* _args){
     };
 
     uint8_t* buffer = malloc((uint16_t)~0);//max 65535 bytes
-    
+
     struct timeval tv;
     tv.tv_sec = 3;
     setsockopt(sock_fd,SOL_SOCKET,SO_RCVTIMEO, &tv, sizeof(struct timeval) );    
+
+
+    int salen = sizeof(struct sockaddr); 
     
     while(1){
-        int salen = sizeof(struct sockaddr); 
         int16_t recieved_len = recvfrom(sock_fd, buffer, 8<<16 -1 ,0, (struct sockaddr*)haa->dest, &salen);
         if(recieved_len <= 0){
-           if(errno == EWOULDBLOCK){
+            if(errno == EWOULDBLOCK){
                 printf(">Socket timeout\n");
                 break;
-           };
-           printf("recvfrom error(%d) : %s\n", errno, strerror(errno));
-           fflush(stdout);
-           close(sock_fd);
-           exit(EXIT_FAILURE);
+            };
+            printf("recvfrom error(%d) : %s\n", errno, strerror(errno));
+            fflush(stdout);
+            close(sock_fd);
+            exit(EXIT_FAILURE);
         };
         struct ip* iph = (struct ip*) buffer;
-        struct tcphdr* tcph = (struct tcphdr*)(buffer + iph->ip_hl * 4);
-        
-	//if(iph->ip_src.s_addr = haa->dest->sin_addr.s_addr){
-		printf(">d>> %s ", inet_ntoa(iph->ip_src) );
-		printf("  %s %d ", inet_ntoa(iph->ip_dst), ntohs(tcph->dest));
-		printf("+ %d closed rst=%d\n", ntohs(tcph->source), tcph->rst );
-	
-	//}
+        struct tcphdr* tcph = (struct tcphdr*)(buffer + iph->ip_hl * 4);//bufferaddr + tobytes(ip_headerlength) // 1/32*4=1/8
+
+        if(iph->ip_src.s_addr = haa->dest->sin_addr.s_addr && tcph->rst == 1){//maimon
+            printf("got rst from :%d (maybe closed)\n", ntohs(tcph->source) );
+        };
 
     };
 
+    close(sock_fd);
 
-
-printf(">handler fin\n");
-fflush(stdout);
+    printf(">handler fin\n");
+    fflush(stdout);
 }
 
 
@@ -306,18 +310,23 @@ void help(char* message){
 
 uint16_t chsum(uint16_t* data_ptr, int nbytes){//len in bytes
     uint32_t sum = 0;
+
+    //summ all 16bit words
     while(nbytes >1){
         sum += *(data_ptr++);
         nbytes -= sizeof(uint16_t);//2
     };
 
-    //if odd len
+    //if odd len, sum+= lastbyte
     if(nbytes > 0) sum += *(uint8_t*)data_ptr;
-   
-    //fit 16bit
-    sum = (sum & 0x0000ffff) + (sum >> 16); 
+
+    //sum = high + low: sum <= 8fff7  
+    sum = (sum & 0x0000ffff) + (sum >> 16);
+
+    //fit 16 bit result: sum <= 8fff7 + 8, sum <= 8ffff  
     sum += (sum >> 16);
 
+    //return binarynot sum: sum <= ffff
     return ~sum;
 };
 
@@ -326,7 +335,7 @@ struct sockaddr* resolve_hostname(char* hostname, struct addrinfo* hints_p){
 
     struct addrinfo*  ainfollist;
     int err = getaddrinfo(hostname, NULL, hints_p, &ainfollist);
-    
+
 
     struct addrinfo* tmp;
     for(tmp = ainfollist;;tmp = tmp->ai_next){
@@ -338,11 +347,11 @@ struct sockaddr* resolve_hostname(char* hostname, struct addrinfo* hints_p){
 
         int skt,conn;
         skt = socket(tmp->ai_family, tmp->ai_socktype, tmp->ai_protocol);
-        if(skt != -1) conn = connect(skt,tmp->ai_addr,tmp->ai_addrlen);
+        if(skt != -1) conn = connect(skt,tmp->ai_addr,tmp->ai_addrlen);//check can connect 
         close(skt);
         if(conn == 0){  break; };
     };
-    
+
     struct sockaddr* ret = malloc(sizeof(struct sockaddr*));//for freeaddrinfo
     memcpy(ret,tmp->ai_addr,sizeof(struct sockaddr*));
     freeaddrinfo(ainfollist);
