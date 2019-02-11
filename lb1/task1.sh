@@ -3,7 +3,7 @@
 
 ARGS="$@"           # script's arguments
 ARGC="$#"           # script's arguments count
-DEBUG=1             # debug logs mode, see: debug()
+DEBUG=0             # debug logs mode, see: debug()
 filepath="$HOME/bash/task1.out" # default filepath
 keepNfiles=''
 
@@ -136,7 +136,7 @@ process_arguments(){
 }
 
 
-prepare_folder(){
+prepare_folder_and_write_to_file(){
 
     local filepath="$1"
 
@@ -150,8 +150,8 @@ prepare_folder(){
 
         #delete all except $filepath, $filepath-$datetoday-<maxnums>
 
-        rm -f `ls -d $directory/* | grep -v -E "^$filepath-$datetoday-[[:digit:]]{4}$" | grep -v -E "^$filepath$" | paste -d " " -` # -v is inverse match # delete all not matched
-        rm -f `ls -t -d $directory/* | grep -v -E "^$filepath$" |  head -n -$((keepNfiles-1)) | paste -d " " -`  #delete old
+        rm -f `ls -t -d $directory/* | grep -v -E "^$filepath-$datetoday-[[:digit:]]{4}$" | grep -v -E "^$filepath$" | paste -d " " -` # -v is inverse match # delete all not matched
+        rm -f `ls -tr -d $directory/* | grep -v -E "^$filepath$" |  head -n -$((keepNfiles-1)) | paste -d " " -`  #delete old
     fi
 
 
@@ -189,71 +189,11 @@ prepare_folder(){
 
 }
 
-#    local maxnum=`ls -dr $directory/* | grep -m 1 -E "^$filepath-$datetoday-[[:digit:]]{4}$"  | sed 's/^.*-\([[:digit:]]\{4\}\)$/\1/p'`
-##if todayfiles empty 
-
-#    debug "maxnum $maxnum"
-#
-#        #todo: if <maxnum> exists then rename increasename <maxnum>
-#        #todo: else rename 
-#        #todo: delete <minnum> file
-## minnum is while 
-#
-#        debug 'file already exists'
-#        
-#        increasename(){
-#            ##increasing numberpart algorithm
-#set -x
-#
-#            local namedate_part=`echo $1 | sed 's/-[[:digit:]]\{4\}$//'`
-#            local number_part=`echo $1 | sed -n 's/^.*-\([[:digit:]]\{4\}\)$/\1/p'`
-#            ##obsolete: #number_part=${number_part/ /} ##clear possible spaces
-#            if [ -z "$number_part" ]; then
-#                number_part='0000'
-#            else 
-#                local number=`echo $number_part | sed 's/^0*//'` ##clear padding zeros
-#                number_part="0000$((number+1))" ##pad
-#                number_part=${number_part: -4}  ##fit 4 length
-#            fi
-#            echo "$namedate_part-$number_part" ##single return point
-#set +x
-#        }
-#
-#        rename(){
-#        set -x
-#            ##$1 p_from 
-#            ##$2 p_to
-#            local renameto = "$2"
-#            while [ -f "$renameto" ]
-#            do    
-#                renameto = `increasename $2`  
-#            done
-#
-#            mv $1 $2    ##point out of recursion
-#           debug 'renamed'$1 $2
-#        set +x
-#        }
-#
-#        rename $filepath `increasename "$filepath-$datetoday"`
-#    
-#    fi
-#    
-
-
-#    if ! [ -z ${keepNfiles/ /} ] ; then ## if set, delete all old and > keepNfiles new
-#        debug "deleting old, keeping $keepNfiles" 
-#        
-#        #todo: delete all except $filepath, $filepath$datetoday-<maxnums>
-#
-#        rm -f `ls -d $directory/* | grep -v -E "^$filepath$datetoday-[[:digit:]]{4}$" | grep -v -E "^$filepath$" | paste -d " " -` # -v is inverse match
-#        rm -f `ls -dr $directory/* | head -n -$keepNfiles | paste -d " " -`
-#    fi
-#}
 
 set -e
 set -o pipefail
 process_arguments $ARGS 
-prepare_folder $filepath
+prepare_folder_and_write_to_file $filepath
 debug "end script"
 
 
