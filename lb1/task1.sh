@@ -145,7 +145,7 @@ prepare_folder_and_write_to_file(){
     debug 'directory' $directory 
 
 
-    if ! [ -z ${keepNfiles/ /} ] ; then ## if set, delete all old > keepNfiles 
+    if ! [ -z ${keepNfiles/ /} ] && [ -d $directory ]; then ## if set, delete all old > keepNfiles 
         debug "deleting old, keeping $keepNfiles" 
 
         #delete all except $filepath, $filepath-$datetoday-<maxnums>
