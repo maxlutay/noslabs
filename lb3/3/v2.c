@@ -88,7 +88,8 @@ void* work(void* _args){
 
     int li = 0, ri = p.size;
     
-
+    //subsequences find algorithm, subseq. to left, others to right, appr O(n^2) , O(1) mem
+    // strange synchronization due to special task 
     while(li < (ri-1) ){
         int countfound = 0;
         for(int i = (li + 1); i < ri ; i++){
